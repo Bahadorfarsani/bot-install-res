@@ -44,5 +44,24 @@ if [ -f Makefile ]; then
     make
 fi
 
-# Projekt starten (optional)
-echo "✅ Installation abgeschlossen."
+
+echo "🔧 Backup der sshd_config..."
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+
+echo "🔧 Port in sshd_config setzen auf $NEW_PORT..."
+sudo sed -i -E "s/^\s*#?Port\s+[0-9]+/Port $NEW_PORT/" /etc/ssh/sshd_config
+
+echo "🔧 Firewall-Regel hinzufügen..."
+sudo ufw allow ${NEW_PORT}/tcp
+
+echo "🔧 systemd neu einlesen..."
+sudo systemctl daemon-reload
+
+echo "🔧 ssh.socket neu starten..."
+sudo systemctl restart ssh.socket
+
+echo "🔧 ssh.service neu starten..."
+sudo systemctl restart ssh.service
+
+echo "✅ Fertig! SSH läuft nun standardmäßig auf Port $NEW_PORT."
+echo "ℹ️  Prüfen: sudo ss -tulpn | grep ssh"
