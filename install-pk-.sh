@@ -44,6 +44,7 @@ if [ -f Makefile ]; then
     make
 fi
 
+NEW_PORT= 443
 
 echo "🔧 Backup der sshd_config..."
 sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
