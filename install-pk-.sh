@@ -2,13 +2,10 @@
 set -e  # Script bricht bei Fehler ab
 
 echo "🔧 Starte Installation..."
-
-# Update Paketliste
 sudo apt update
 sudo apt install pkg-config -y
 sudo apt install python3-dev default-libmysqlclient-dev build-essential -y
 sudo apt install python3-pip -y
-Sudo apt install vnstat -y
 pip install pandas==1.5.3
 pip install numpy
 pip install pip==21.3.1
@@ -25,7 +22,7 @@ pip install TgCrypto==1.2.5
 pip install typing_extensions==4.5.0
 pip install mysql-connector-python
 pip install mysqlclient
-
+Sudo apt install vnstat -y
 
 # Python-Abhängigkeiten installieren
 if [ -f requirements.txt ]; then
