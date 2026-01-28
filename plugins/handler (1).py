@@ -1,0 +1,445 @@
+import time
+from datetime import datetime
+import subprocess
+import bcrypt
+import sqlalchemy as db
+from sqlalchemy.orm import sessionmaker
+from collections import defaultdict
+from pyrogram import Client, filters
+from pyrogram.enums import ChatAction
+from pyrogram.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from constants import messages, HOST, PORT
+from database import User, Account, Admin, Message
+import uuid
+import random
+import string
+import pandas as pd
+import pyromod.listen
+import math
+
+from os import listdir
+
+def tree():
+    return defaultdict(tree)
+
+
+user_pocket = tree()
+
+engine = db.create_engine("mysql://armin:T101vb$!GuYX@ub.pxnet.de/telegram_bot", echo=True)
+connection = engine.connect()
+Session = sessionmaker(bind=engine)
+
+
+def username_generator():
+    user_no = random.randint(100, 999)
+    username = time.strftime("%d%m") + "a" + str(user_no)
+    return username
+
+
+def password_generator():
+    string_domain = string.ascii_lowercase + string.digits
+    password = ''.join(random.choice(string_domain) for i in range(4))
+    return password
+
+
+def set_password(username, password):
+    p = subprocess.Popen(["/usr/sbin/chpasswd"], universal_newlines=True, shell=False, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (stdout, stderr) = p.communicate(username + ":" + password + "\n")
+    assert p.wait() == 0
+    if stdout or stderr:
+        raise Exception("Error encountered changing the password!")
+
+
+@Client.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    user_pocket[message.from_user.id]["step"] = "start"
+    await message.reply_chat_action(ChatAction.TYPING)
+    keys = [[messages["admin_panel"], messages["vip_panel"]]]
+    keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True, one_time_keyboard=True)
+    await client.send_message(chat_id=message.from_user.id, text=messages["welcome"], reply_markup=keyboard)
+
+
+async def authentication(client: pyromod.listen.Client, message: Message, next_step, table):
+    if user_pocket[message.from_user.id]["step"] == "start" \
+            or user_pocket[message.from_user.id]["step"] == "vip_auth" \
+            or user_pocket[message.from_user.id]["step"] == "admin_auth":
+        user_pocket[message.from_user.id]["step"] = next_step
+        await message.reply_chat_action(ChatAction.TYPING)
+        username = await client.ask(chat_id=message.from_user.id, text=messages["enter_your_username"])
+        password = await client.ask(chat_id=message.from_user.id, text=messages["enter_your_id"])
+        session = Session()
+        exists = session.query(
+            session.query(table).filter_by(username=username.text, password=password.text).exists()
+        ).scalar()
+        if exists:
+            await authenticated_handler(client, message, username.text, user_pocket[message.from_user.id]["step"])
+        else:
+            await message.reply_text(text=messages["user_not_found"])
+        session.close()
+
+
+async def vip_keyboard():
+    return [[messages["add_account_one_month"]], [messages["add_revival_one_month"]],
+                    [messages["change_account_password"]],
+                    [messages["account_retrieval"]],[messages["send_request"]],[messages["back"]]]
+
+async def authenticated_handler(client: Client, message: Message, username, step):
+    if user_pocket[message.from_user.id]["step"] == step:
+        user_pocket[message.from_user.id]["step"] = "authenticated"
+        user_pocket[message.from_user.id]["username"] = username
+        keys = None
+        if step == "vip_auth":
+            user_pocket[message.from_user.id]["type"] = "vip_user"
+            keys = await vip_keyboard()
+        elif step == "admin_auth":
+            user_pocket[message.from_user.id]["type"] = "admin"
+            keys = [[messages["user_managing"]], [messages["account_managing"]],
+                    [messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True, one_time_keyboard=False)
+        await client.send_message(chat_id=message.from_user.id, text=messages["login_successfully"],
+                                  reply_markup=keyboard)
+
+
+@Client.on_message(filters.regex(messages["vip_panel"]) & filters.private)
+async def user_panel_handler(client: pyromod.listen.Client, message: Message):
+    await authentication(client, message, "vip_auth", User)
+
+
+@Client.on_message(filters.regex(messages["admin_panel"]) & filters.private)
+async def admin_panel_handler(client: pyromod.listen.Client, message: Message):
+    await authentication(client, message, "admin_auth", Admin)
+
+@Client.on_message(filters.regex(messages["add_account_one_month"]) & filters.private)
+async def add_account_one_month(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "authenticated" or \
+    user_pocket[message.from_user.id]["step"] == "account_management":
+        await add_accounts(client,message,1)
+
+# @Client.on_message(filters.regex(messages["add_account_three_month"]) & filters.private)
+# async def add_account_three_month(client: pyromod.listen.Client, message: Message):
+#     if user_pocket[message.from_user.id]["step"] == "authenticated" or \
+#     user_pocket[message.from_user.id]["step"] == "account_management":
+#         await add_accounts(client,message,3)
+
+async def add_accounts(client: pyromod.listen.Client, message: Message, month):
+    created_accounts = await check_daily_limitation(message)
+    res = await client.ask(chat_id=message.from_user.id, text=messages["enter_number_of_accounts"])
+    session = Session()
+    user =  session.query(User).filter_by(username=user_pocket[message.from_user.id]['username']).first()
+    if int(res.text) * int(user.price) > int(user.balance):
+        max_limit = math.floor(int(user.balance) / int(user.price))
+        await message.reply_text(f"شما حداکثر تعداد {max_limit} اکانت می‌توانید دریافت کنید.")
+        await message.reply_text("برای دریافت اکانت بیشتر ابتدا حساب خود را تسویه کنید")
+
+        await back(client,message)
+        return
+    if res.text == messages["back"]:
+        await back(client,message)
+        return
+    try:
+        if int(res.text) > 10:
+            await message.reply_text(messages["max_ten_account_per_attemp"])
+            return
+    except:
+        await message.reply_text(messages["invalid_input"])
+
+    if created_accounts + int(res.text) <= 30:
+        file_path = f"history/{user_pocket[message.from_user.id]['username']}/{time.strftime('%m-%d %H:%M:%S')}-acc({res.text}).txt"
+        try:
+            file = open(file_path, "a+")
+        except:
+            subprocess.run(['mkdir', f"history/{user_pocket[message.from_user.id]['username']}"])
+            file = open(file_path, "a+")
+        number = 1
+        for i in range(int(res.text)):
+            username = None
+            password = password_generator()
+            session = Session()
+            exists = True
+            while exists:
+                username = username_generator()
+                exists = session.query(
+                    session.query(Account).filter_by(username=username).exists()
+                ).scalar()
+            new_user = Account(username=username,
+                                password=password,
+                                host=HOST,
+                                creator=user_pocket[message.from_user.id]["username"],
+                                created_date=time.strftime('%Y-%m-%d'),
+                                created_time=time.strftime('%H:%M:%S'),
+                                expiration=expiration_time_generator(time.strftime('%Y-%m-%d'), month),
+                                month=1)
+            session.add(new_user)
+            session.commit()
+            await create_account(message, username, password, file, number, month)
+            number += 1
+
+            session.close()
+        file.close()
+        user =  session.query(User).filter_by(username=user_pocket[message.from_user.id]['username']).first()
+        user.balance = int(user.balance) - (int(res.text) * int(user.price))
+        session.commit()
+        
+        await message.reply_document(file_path)
+        await message.reply_text("تعداد {} اکانت با موفقیت ساخته شد!".format(res.text))
+        
+        keys = await vip_keyboard()
+
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True, one_time_keyboard=False)
+        await message.reply_text(text=messages["choose_your_option"],reply_markup=keyboard)
+
+    else:
+        await message.reply_text(messages["limitation_error"])
+
+@Client.on_message(filters.regex(messages["add_revival_one_month"]) & filters.private)
+async def add_revival_one_month(client: pyromod.listen.Client, message: Message):
+    await account_revival(client,message,1)
+# @Client.on_message(filters.regex(messages["add_revival_three_month"]) & filters.private)
+# async def add_revival_three_month(client: pyromod.listen.Client, message: Message):
+#     await account_revival(client,message,3)
+
+
+async def account_revival(client: pyromod.listen.Client, message: Message, month):
+    if user_pocket[message.from_user.id]["step"] == "authenticated" or \
+            user_pocket[message.from_user.id]["step"] == "account_management":
+        user_name = await client.ask(chat_id=message.from_user.id, text=messages["enter_username"])
+
+        session = Session()
+        exists = session.query(
+            session.query(Account).filter_by(username=user_name.text).exists()
+        ).scalar()
+        if exists:
+            account = session.query(Account).filter_by(username=user_name.text).first()
+            new_expiration_time = expiration_time_generator(account.expiration.strftime('%Y-%m-%d'), month).strftime('%Y-%m-%d')
+            subprocess.run(['useradd', user_name.text, '--shell=/bin/false', "--no-create-home"])
+            set_password(user_name.text, account.password)
+            subprocess.run(['chage', '-E', new_expiration_time, user_name.text])
+            session.query(Account).filter(Account.username == user_name.text). \
+                update({Account.expiration: new_expiration_time, Account.month: Account.month + 1},
+                       synchronize_session=False)
+            session.commit()
+            await message.reply_text(messages["account_revival_successfully"])
+            await message.reply_text("{}:\n{}".format(messages["new_expiration_time"], new_expiration_time))
+        else:
+            await message.reply_text(messages["account_not_found"])
+        session.close()
+
+
+@Client.on_message(filters.regex(messages["send_request"]) & filters.private)
+async def send_request(client: pyromod.listen.Client, message: Message):
+    message = await client.ask(chat_id=message.from_user.id, text=messages["enter_message"])
+    session = Session()
+    new_msg = Message(id =str(uuid.uuid4()),
+                    username=user_pocket[message.from_user.id]["username"],
+                    message=message.text,
+                    date=time.strftime('%Y-%m-%d'))
+    session.add(new_msg)
+    session.commit()
+    await message.reply_text(messages["message_sent_successfully"])
+
+@Client.on_message(filters.regex(messages["user_managing"]) & filters.private)
+async def user_management(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["type"] == "admin" and \
+            user_pocket[message.from_user.id]["step"] == "authenticated":
+        user_pocket[message.from_user.id]["step"] = "user_management"
+        keys = [[messages["add_user"], messages["delete_user"]], [messages["change_user_password"]], [messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True)
+        await message.reply_text(messages["choose_your_option"], reply_markup=keyboard)
+
+
+@Client.on_message(filters.regex(messages["account_managing"]) & filters.private)
+async def account_management(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["type"] == "admin" and \
+            user_pocket[message.from_user.id]["step"] == "authenticated":
+        user_pocket[message.from_user.id]["step"] = "account_management"
+        keys = [[messages["add_account"], messages["change_account_password"]], [messages["account_revival"]],
+                [messages["delete_account"]], [messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True)
+        await message.reply_text(messages["choose_your_option"], reply_markup=keyboard)
+
+
+@Client.on_message(filters.regex(messages["add_user"]) & filters.private)
+async def add_user(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "user_management":
+        user_name = await client.ask(chat_id=message.from_user.id, text=messages["enter_new_user_name"])
+        session = Session()
+        exists = session.query(
+            session.query(User).filter_by(username=user_name.text).exists()
+        ).scalar()
+        if exists:
+            await message.reply_text(messages["username_exist"])
+        else:
+            password = password_generator()
+            new_user = User(username=user_name.text, password=password)
+            session.add(new_user)
+            session.commit()
+            await message.reply_text(messages["new_user_created_successfully"])
+            await message.reply_text("نام کاربری: {}\nکد کاربری:{}".format(user_name.text, password))
+        session.close()
+
+
+@Client.on_message(filters.regex(messages["delete_user"]) & filters.private)
+async def delete_user(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "user_management":
+        await delete(client, message, User)
+
+
+@Client.on_message(filters.regex(messages["delete_account"]) & filters.private)
+async def delete_account(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["type"] == "admin" and \
+            user_pocket[message.from_user.id]["step"] == "account_management":
+        await delete(client, message, Account)
+
+
+async def delete(client: pyromod.listen.Client, message: Message, table):
+    user_name = await client.ask(chat_id=message.from_user.id, text=messages["enter_username"])
+    session = Session()
+    exists = session.query(
+        session.query(table).filter_by(username=user_name.text).exists()
+    ).scalar()
+    if exists:
+        session.query(table).filter_by(username=user_name.text).delete()
+        session.commit()
+        if table == User:
+            await message.reply_text(messages["user_deleted_successfully"])
+        elif table == Account:
+            subprocess.run(['userdel','-f', user_name.text])
+            await message.reply_text(messages["account_deleted_successfully"])
+
+    else:
+        if table == User:
+            await message.reply_text(messages["user_not_found"])
+        elif table == Account:
+            await message.reply_text(messages["account_not_found"])
+    session.close()
+
+
+@Client.on_message(filters.regex(messages["back"]) & filters.private)
+async def back(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "authenticated":
+        await start_handler(client, message)
+
+    elif (user_pocket[message.from_user.id]["step"] == "users_report" and user_pocket[message.from_user.id]["type"] == "admin") or (user_pocket[message.from_user.id]["step"] == "hosts_report"):
+        user_pocket[message.from_user.id]["step"] = "get_report"
+        keys = [[messages["summary_all"], messages["summary_today"]], [messages["users_files_retrieval"]],[messages["users_report"]],
+                [messages["hosts_report"]],[messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True)
+        await message.reply_text(messages["choose_your_option"], reply_markup=keyboard)
+
+    elif user_pocket[message.from_user.id]["step"] == "users_report":
+        user_pocket[message.from_user.id]["step"] = "authenticated"
+        keys = [[messages["add_account"], messages["change_account_password"]], [messages["account_revival"]],
+                [messages["account_retrieval"]],[messages["users_report"]],[messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True)
+        await message.reply_text(messages["choose_your_option"], reply_markup=keyboard)
+
+    elif user_pocket[message.from_user.id]["type"] == "admin":
+        user_pocket[message.from_user.id]["step"] = "authenticated"
+        keys = [[messages["user_managing"]], [messages["account_managing"]], [messages["get_report"]],
+                [messages["back"]]]
+        keyboard = ReplyKeyboardMarkup(keys, resize_keyboard=True)
+        await message.reply_text(text=messages["back_to_admin_panel"], reply_markup=keyboard)
+
+async def check_daily_limitation(message: Message):
+    session = Session()
+    count = session.query(Account).filter_by(creator=user_pocket[message.from_user.id]["username"],
+                                             created_date=time.strftime('%Y-%m-%d')).count()
+    session.close()
+    return count
+
+
+async def create_account(message: Message, username, password, file: open, number, month):
+    await message.reply_chat_action(ChatAction.TYPING)
+
+    try:
+        expiration_time = expiration_time_generator(time.strftime('%Y-%m-%d'),month).strftime('%Y-%m-%d')
+        subprocess.run(
+            ['useradd', username, '--shell=/bin/false', "--no-create-home", "-e", expiration_time])
+        set_password(username, password)
+
+        file.write(
+            "\n{} ------------------------------------\n\n Host: {}\n\n Port: {}\n\n Username: {} \n\n Password: {}\n\n Expiration time: {}\n\n"
+
+                .format(number, HOST, PORT, username, password, expiration_time))
+        file.write("کاربر گرامی، اکانت ها تک کابره هستند. در صورت استفاده چند کاربر همزمان، اکانت دچار اختلال و قطعی خواهد شد.")
+
+        # url_path = password_generator()
+        # with open(f"accounts/{url_path}.txt", "w+") as f:
+        #     file.write(
+        #     "{} ------------------------------------\n\n Host: {}\n\n Port: {}\n\n Username: {} \n\n Password: {}\n\n Expiration time: {}\n\n"
+
+        #         .format(number, HOST, PORT, username, password, expiration_time))
+    except:
+        await message.reply_text(messages["try_again"])
+
+
+
+@Client.on_message(filters.regex(messages["change_account_password"]) & filters.private)
+async def change_account_password(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "authenticated" or \
+            user_pocket[message.from_user.id]["step"] == "account_management":
+        res = await client.ask(chat_id=message.from_user.id, text=messages["enter_username"])
+        session = Session()
+        exists = session.query(session.query(Account).filter_by(username=res.text))
+
+        if exists:
+            new_pass = await client.ask(chat_id=message.from_user.id, text=messages["enter_new_password"])
+            account = session.query(Account).filter_by(username=res.text).first()
+            account.password = new_pass.text
+            session.commit()
+            set_password(username=res.text, password=new_pass.text)
+            await message.reply_text(messages["password_changed_successfully"])
+            await message.reply_text("Username: {}\n\nPassword: {}".format(res.text, new_pass.text))
+        else:
+            await message.reply_text(messages["account_not_found"])
+        session.close()
+
+
+@Client.on_message(filters.regex(messages["change_user_password"]) & filters.private)
+async def change_user_password(client: pyromod.listen.Client, message: Message):
+    if user_pocket[message.from_user.id]["step"] == "user_management":
+        res = await client.ask(chat_id=message.from_user.id, text=messages["enter_username"])
+        session = Session()
+        exists = session.query(
+            session.query(User).filter_by(username=res.text).exists()
+        ).scalar()
+
+        if exists:
+            new_pass = await client.ask(chat_id=message.from_user.id, text=messages["enter_new_password"])
+            user = session.query(User).filter_by(username=res.text).first()
+            user.password = new_pass.text
+            session.commit()
+            await message.reply_text(messages["password_changed_successfully"])
+            await message.reply_text("Username: {}\n\nPassword: {}".format(res.text, new_pass.text))
+        else:
+            await message.reply_text(messages["account_not_found"])
+        session.close()
+
+
+def expiration_time_generator(time, month):
+    date = time.split("-")
+    if int(date[1]) + month > 12:
+        next_year = int(date[0]) + 1
+        next_month = int(date[1]) + month - 12
+        new_date = "{}-{}-{}".format(next_year, next_month, date[2])
+        return datetime.strptime(new_date, '%Y-%m-%d').date()
+    else:
+        next_month = int(date[1]) + month
+        thirty_days_month = [4,6,9,11]
+        if next_month in thirty_days_month and date[2] == '31':
+            new_date = "{}-{}-{}".format(date[0], next_month, 30)
+        elif next_month == 2 and date[2] == '29':
+            new_date = "{}-{}-{}".format(date[0], 3, 1)
+        elif next_month == 2 and date[2] == '30':
+            new_date = "{}-{}-{}".format(date[0], 3, 2)
+        elif next_month == 2 and date[2] == '31':
+            new_date = "{}-{}-{}".format(date[0], 3, 3)            
+        else:
+            new_date = "{}-{}-{}".format(date[0], next_month, date[2])
+        return datetime.strptime(new_date, '%Y-%m-%d').date()
+
+
+@Client.on_message(filters.text & filters.private)
+async def other_handler(client: pyromod.listen.Client, message: Message):
+    await message.reply_text(messages["please_first_choose_operation"])
