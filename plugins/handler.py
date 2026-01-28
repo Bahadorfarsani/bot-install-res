@@ -32,7 +32,7 @@ Session = sessionmaker(bind=engine)
 
 def username_generator():
     user_no = random.randint(100, 999)
-    username = time.strftime("%d%m") + "a" + str(user_no)
+    username = time.strftime("%d%m") + "x" + str(user_no)
     return username
 
 
@@ -144,7 +144,7 @@ async def add_accounts(client: pyromod.listen.Client, message: Message, month):
     except:
         await message.reply_text(messages["invalid_input"])
 
-    if created_accounts + int(res.text) <= 30:
+    if created_accounts + int(res.text) <= 3000:
         file_path = f"history/{user_pocket[message.from_user.id]['username']}/{time.strftime('%m-%d %H:%M:%S')}-acc({res.text}).txt"
         try:
             file = open(file_path, "a+")
@@ -443,3 +443,4 @@ def expiration_time_generator(time, month):
 @Client.on_message(filters.text & filters.private)
 async def other_handler(client: pyromod.listen.Client, message: Message):
     await message.reply_text(messages["please_first_choose_operation"])
+
