@@ -22,6 +22,9 @@ pip install TgCrypto==1.2.5
 pip install typing_extensions==4.5.0
 pip install mysql-connector-python
 pip install mysqlclient
+pip uninstall -y numpy pandas
+pip cache purge
+pip install numpy pandas
 Sudo apt install vnstat -y
 
 # Python-Abhängigkeiten installieren
